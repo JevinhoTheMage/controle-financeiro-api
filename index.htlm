@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Controle Financeiro J ❤ N</title>
+
+  <!-- Tailwind (Play CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+
+  <!-- React / ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@17/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+
+  <!-- Recharts UMD -->
+  <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+
+  <!-- Babel (para permitir JSX no navegador) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* Pequenos ajustes para que o app ocupe toda a tela corretamente */
+    html, body, #root { height: 100%; }
+  </style>
+</head>
+<body class="bg-gray-900 text-white">
+  <div id="root" class="min-h-screen"></div>
+
+  <script type="text/babel">
+  // Usa React e Recharts vindos pelos CDNs
+  const { useState, useEffect, useCallback } = React;
+  const { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line } = Recharts;
+
+  // === CONFIGURE AQUI SUA API (ja predefinida conforme você informou) ===
+  const API = "https://controle-financeiro-api-production-4c60.up.railway.app";
+
+  const COLORS = ["#6366f1","#f59e0b","#10b981","#ef4444","#3b82f6","#ec4899","#8b5cf6","#14b8a6","#f97316","#84cc16","#06b6d4","#e11d68"];
+  const CATEGORIAS = ["Alimentação","Transporte","Lazer","Saúde","Educação","Moradia","Vestuário","Assinaturas","Pets","Presentes","Viagem","Outros"];
+  const PAGAMENTOS = ["Débito","Crédito","Pix","Dinheiro","Transferência"];
+
+  function formatBRL(v) {
+    return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  }
+
+  function StatusBadge({ pct }) {
+    const color = pct <= 70 ? "bg-green-500" : pct <= 90 ? "bg-yellow-500" : "bg-red-500";
+    const label = pct <= 70 ? "OK" : pct <= 90 ? "Atenção" : "Limite";
+    return <span className={`${color} text-white text-xs px-2 py-1 rounded-full font-semibold`}>{label} ({pct}%)</span>;
+  }
+
+  function Card({ title, children, className = "" }) {
+    return (
+      <div className={`bg-gray-800 rounded-xl p-5 shadow-lg border border-gray-700 ${className}`}>
+        {title && <h3 className="text-gray-400 text-sm font-medium mb-3 uppercase tracking-wide">{title}</h3>}
+        {children}
+      </div>
+    );
+  }
+
+  function Modal({ open, onClose, title, children }) {
+    if (!open) return null;
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+        <div className="bg-gray-800 rounded-xl p-6 w-full max-w-md border border-gray-600 shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-bold text-white">{title}</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">×</button>
+          </div>
+          {children}
+        </div>
+      </div>
+    );
+  }
+
+  function Input({ label, ...props }) {
+    return (
+      <div className="mb-3">
+        <label className="block text-gray-400 text-sm mb-1">{label}</label>
+        <input className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 border border-gray-600 focus:border-indigo-500 focus:outline-none" {...props} />
+      </div>
+    );
+  }
+
+  function Select({ label, options, ...props }) {
+    return (
+      <div className="mb-3">
+        <label className="block text-gray-400 text-sm mb-1">{label}</label>
+        <select className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 border border-gray-600 focus:border-indigo-500 focus:outline-none" {...props}>
+          <option value="">Selecione...</option>
+          {options.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+    );
+  }
+
+  function Btn({ children, onClick, variant = "primary", className = "", ...props }) {
+    const base = "px-4 py-2 rounded-lg font-semibold text-sm transition-all ";
+    const styles = {
+      primary: "bg-indigo-600 hover:bg-indigo-700 text-white",
+      danger: "bg-red-600 hover:bg-red-700 text-white",
+      ghost: "bg-gray-700 hover:bg-gray-600 text-gray-300",
+    };
+    return <button className={base + styles[variant] + " " + className} onClick={onClick} {...props}>{children}</button>;
+  }
+
+  function App() {
+    const [tab, setTab] = useState("dashboard");
+    const [dash, setDash] = useState(null);
+    const [config, setConfig] = useState(null);
+    const [fixos, setFixos] = useState([]);
+    const [diarios, setDiarios] = useState([]);
+    const [investimentos, setInvestimentos] = useState(null);
+    const [categorias, setCategorias] = useState([]);
+    const [comparacao, setComparacao] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [modal, setModal] = useState(null);
+    const [msg, setMsg] = useState("");
+
+    const [mesRef, setMesRef] = useState(new Date().toISOString().slice(0, 7));
+
+    const api = useCallback(async (path, opts = {}) => {
+      try {
+        const res = await fetch(API + path, {
+          headers: { "Content-Type": "application/json" },
+          ...opts,
+        });
+        return await res.json();
+      } catch (e) {
+        setMsg("Erro de conexão com a API");
+        return null;
+      }
+    }, []);
+
+    const load = useCallback(async () => {
+      setLoading(true);
+      const [d, c, f, g, i, cat, comp] = await Promise.all([
+        api("/dashboard?mes_referencia=" + mesRef),
+        api("/config"),
+        api("/gastos-fixos"),
+        api("/gastos-diarios?mes_referencia=" + mesRef),
+        api("/investimentos"),
+        api("/por-categoria?mes_referencia=" + mesRef),
+        api("/comparacao-mensal"),
+      ]);
+      if (d && !d.detail) setDash(d);
+      if (c && !c.detail) setConfig(c);
+      if (f) setFixos(f.gastos_fixos || []);
+      if (g) setDiarios(g.gastos || []);
+      if (i) setInvestimentos(i);
+      if (cat) setCategorias(cat.categorias || []);
+      if (comp) setComparacao(comp.comparacao_mensal || []);
+      setLoading(false);
+    }, [api, mesRef]);
+
+    useEffect(() => { load(); }, [load]);
+
+    useEffect(() => {
+      if (msg) { const t = setTimeout(() => setMsg(""), 3000); return () => clearTimeout(t); }
+    }, [msg]);
+
+    // Forms
+    const [configForm, setConfigForm] = useState({ salario: "", percentual_investimento: "" });
+    const [fixoForm, setFixoForm] = useState({ descricao: "", valor: "", vencimento_dia: "" });
+    const [diarioForm, setDiarioForm] = useState({ data: new Date().toISOString().slice(0, 10), descricao: "", categoria: "", valor: "", forma_pagamento: "" });
+    const [invForm, setInvForm] = useState({ mes_referencia: mesRef, valor_aportado: "", rendimento_percentual: "0.8" });
+
+    const saveConfig = async () => {
+      const r = await api("/config", { method: "POST", body: JSON.stringify({ salario: +configForm.salario, percentual_investimento: +configForm.percentual_investimento }) });
+      if (r && !r.detail) { setMsg("Configuração salva!"); setModal(null); load(); }
+      else setMsg(r?.detail || "Erro ao salvar");
+    };
+
+    const addFixo = async () => {
+      const r = await api("/gastos-fixos", { method: "POST", body: JSON.stringify({ descricao: fixoForm.descricao, valor: +fixoForm.valor, vencimento_dia: +fixoForm.vencimento_dia }) });
+      if (r && !r.detail) { setMsg("Gasto fixo adicionado!"); setModal(null); setFixoForm({ descricao: "", valor: "", vencimento_dia: "" }); load(); }
+      else setMsg(r?.detail || "Erro");
+    };
+
+    const delFixo = async (id) => {
+      await api("/gastos-fixos/" + id, { method: "DELETE" });
+      setMsg("Removido!"); load();
+    };
+
+    const addDiario = async () => {
+      const body = { ...diarioForm, valor: +diarioForm.valor, mes_referencia: mesRef };
+      const r = await api("/gastos-diarios", { method: "POST", body: JSON.stringify(body) });
+      if (r && !r.detail) { setMsg("Gasto registrado!"); setModal(null); setDiarioForm({ data: new Date().toISOString().slice(0, 10), descricao: "", categoria: "", valor: "", forma_pagamento: "" }); load(); }
+      else setMsg(r?.detail || "Erro");
+    };
+
+    const delDiario = async (id) => {
+      await api("/gastos-diarios/" + id, { method: "DELETE" });
+      setMsg("Removido!"); load();
+    };
+
+    const addInv = async () => {
+      const r = await api("/investimentos", { method: "POST", body: JSON.stringify({ mes_referencia: invForm.mes_referencia, valor_aportado: +invForm.valor_aportado, rendimento_percentual: +invForm.rendimento_percentual }) });
+      if (r && !r.detail) { setMsg("Aporte registrado!"); setModal(null); load(); }
+      else setMsg(r?.detail || "Erro");
+    };
+
+    const tabs = [
+      { id: "dashboard", icon: "fa-chart-line", label: "Dashboard" },
+      { id: "fixos", icon: "fa-thumbtack", label: "Fixos" },
+      { id: "diarios", icon: "fa-receipt", label: "Diários" },
+      { id: "investimentos", icon: "fa-piggy-bank", label: "Investimentos" },
+      { id: "config", icon: "fa-gear", label: "Config" },
+    ];
+
+    const pieData = categorias.map((c, i) => ({ name: c.categoria, value: c.total }));
+
+    return (
+      <div className="min-h-screen bg-gray-900 text-white">
+        {msg && (
+          <div className="fixed top-4 right-4 bg-indigo-600 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-pulse">
+            {msg}
+          </div>
+        )}
+
+        <header className="bg-gray-800 border-b border-gray-700 px-4 py-3">
+          <div className="max-w-6xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <i className="fas fa-wallet text-indigo-400 text-2xl"></i>
+              <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text" style={{ WebkitTextFillColor: "transparent" }}>
+                Controle Financeiro J <span style={{ WebkitTextFillColor: "#ef4444", color: "#ef4444" }}>❤</span> N
+              </h1>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-gray-400 text-sm">Mês:</label>
+              <input type="month" value={mesRef} onChange={e => setMesRef(e.target.value)}
+                className="bg-gray-700 text-white rounded-lg px-3 py-1 border border-gray-600 text-sm" />
+            </div>
+          </div>
+        </header>
+
+        <nav className="bg-gray-800 border-b border-gray-700">
+          <div className="max-w-6xl mx-auto flex overflow-x-auto">
+            {tabs.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${
+                  tab === t.id ? "border-indigo-500 text-indigo-400" : "border-transparent text-gray-400 hover:text-white"
+                }`}>
+                <i className={`fas ${t.icon}`}></i> {t.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+
+        <main className="max-w-6xl mx-auto p-4">
+          {loading && <div className="text-center py-8 text-gray-400"><i className="fas fa-spinner fa-spin text-2xl"></i></div>}
+
+          {/* DASHBOARD */}
+          {tab === "dashboard" && dash && !loading && (
+            <div className="space-y-4">
+              {/* KPIs */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Card>
+                  <p className="text-gray-400 text-xs uppercase">Renda</p>
+                  <p className="text-xl font-bold text-green-400">{formatBRL(dash.renda)}</p>
+                </Card>
+                <Card>
+                  <p className="text-gray-400 text-xs uppercase">Gastos Fixos</p>
+                  <p className="text-xl font-bold text-orange-400">{formatBRL(dash.gastos_fixos)}</p>
+                </Card>
+                <Card>
+                  <p className="text-gray-400 text-xs uppercase">Gastos Avulsos</p>
+                  <p className="text-xl font-bold text-red-400">{formatBRL(dash.gasto_avulso_real)}</p>
+                </Card>
+                <Card>
+                  <p className="text-gray-400 text-xs uppercase">Investimento</p>
+                  <p className="text-xl font-bold text-indigo-400">{formatBRL(dash.investimento_acumulado)}</p>
+                </Card>
+              </div>
+
+              <Card title="Budget de Gastos Avulsos">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-white font-bold">{formatBRL(dash.ainda_posso_gastar)} <span className="text-gray-400 text-sm font-normal">restante</span></span>
+                  <StatusBadge pct={dash.percentual_budget_utilizado} />
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${dash.percentual_budget_utilizado <= 70 ? "bg-green-500" : dash.percentual_budget_utilizado <= 90 ? "bg-yellow-500" : "bg-red-500"}`}
+                    style={{ width: Math.min(dash.percentual_budget_utilizado, 100) + "%" }}></div>
+                </div>
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>{formatBRL(dash.gasto_avulso_real)} gasto</span>
+                  <span>{formatBRL(dash.budget_avulsos)} budget</span>
+                </div>
+              </Card>
+
+              <div className="grid md:grid-cols-2 gap-4">
+                <Card title="Gastos por Categoria">
+                  {pieData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={250}>
+                      <PieChart>
+                        <Pie data={pieData} cx="50%" cy="50%" outerRadius={90} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                          {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip formatter={v => formatBRL(v)} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : <p className="text-gray-500 text-center py-8">Sem gastos neste mês</p>}
+                </Card>
+
+                <Card title="Evolução Investimentos">
+                  {investimentos && investimentos.historico.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={250}>
+                      <LineChart data={investimentos.historico}>
+                        <XAxis dataKey="mes" stroke="#6b7280" tick={{ fontSize: 11 }} />
+                        <YAxis stroke="#6b7280" tick={{ fontSize: 11 }} />
+                        <Tooltip formatter={v => formatBRL(v)} />
+                        <Line type="monotone" dataKey="acumulado" stroke="#6366f1" strokeWidth={2} dot={{ fill: "#6366f1" }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : <p className="text-gray-500 text-center py-8">Sem investimentos</p>}
+                </Card>
+              </div>
+
+              {comparacao.length > 0 && (
+                <Card title="Comparação Mensal">
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart data={comparacao}>
+                      <XAxis dataKey="mes" stroke="#6b7280" tick={{ fontSize: 11 }} />
+                      <YAxis stroke="#6b7280" tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={v => formatBRL(v)} />
+                      <Bar dataKey="total" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Card>
+              )}
+            </div>
+          )}
+
+          {tab === "dashboard" && !dash && !loading && (
+            <Card className="text-center py-12">
+              <i className="fas fa-cog text-4xl text-gray-600 mb-3"></i>
+              <p className="text-gray-400">Configure seu salário primeiro na aba <strong>Config</strong></p>
+            </Card>
+          )}
+
+          {tab === "fixos" && !loading && (
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-bold">Gastos Fixos</h2>
+                <Btn onClick={() => setModal("fixo")}><i className="fas fa-plus mr-1"></i> Adicionar</Btn>
+              </div>
+              {fixos.length === 0 ? (
+                <Card className="text-center py-8"><p className="text-gray-500">Nenhum gasto fixo cadastrado</p></Card>
+              ) : (
+                <div className="space-y-2">
+                  {fixos.map(g => (
+                    <Card key={g.id} className="flex items-center justify-between">
+                      <div>
+                        <p className="font-semibold">{g.descricao}</p>
+                        <p className="text-gray-400 text-sm">Vence dia {g.vencimento_dia}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-orange-400 font-bold">{formatBRL(g.valor)}</span>
+                        <button onClick={() => delFixo(g.id)} className="text-red-400 hover:text-red-300"><i className="fas fa-trash"></i></button>
+                      </div>
+                    </Card>
+                  ))}
+                  <Card>
+                    <p className="text-right text-gray-400">Total: <span className="text-white font-bold">{formatBRL(fixos.reduce((s, g) => s + g.valor, 0))}</span></p>
+                  </Card>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "diarios" && !loading && (
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-bold">Gastos Diários — {mesRef}</h2>
+                <Btn onClick={() => setModal("diario")}><i className="fas fa-plus mr-1"></i> Registrar</Btn>
+              </div>
+              {diarios.length === 0 ? (
+                <Card className="text-center py-8"><p className="text-gray-500">Nenhum gasto neste mês</p></Card>
+              ) : (
+                <div className="space-y-2">
+                  {diarios.map(g => (
+                    <Card key={g.id} className="flex items-center justify-between">
+                      <div>
+                        <p className="font-semibold">{g.descricao}</p>
+                        <div className="flex gap-2 mt-1">
+                          <span className="bg-indigo-900 text-indigo-300 text-xs px-2 py-0.5 rounded">{g.categoria}</span>
+                          <span className="bg-gray-700 text-gray-300 text-xs px-2 py-0.5 rounded">{g.forma_pagamento}</span>
+                          <span className="text-gray-500 text-xs">{g.data}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-red-400 font-bold">{formatBRL(g.valor)}</span>
+                        <button onClick={() => delDiario(g.id)} className="text-red-400 hover:text-red-300"><i className="fas fa-trash"></i></button>
+                      </div>
+                    </Card>
+                  ))}
+                  <Card>
+                    <p className="text-right text-gray-400">Total: <span className="text-white font-bold">{formatBRL(diarios.reduce((s, g) => s + g.valor, 0))}</span></p>
+                  </Card>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "investimentos" && !loading && (
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-bold">Investimentos</h2>
+                <Btn onClick={() => setModal("inv")}><i className="fas fa-plus mr-1"></i> Novo Aporte</Btn>
+              </div>
+              {investimentos && investimentos.historico.length > 0 ? (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Card>
+                      <p className="text-gray-400 text-xs uppercase">Total Aportado</p>
+                      <p className="text-xl font-bold text-indigo-400">{formatBRL(investimentos.total_aportado)}</p>
+                    </Card>
+                    <Card>
+                      <p className="text-gray-400 text-xs uppercase">Acumulado Atual</p>
+                      <p className="text-xl font-bold text-green-400">{formatBRL(investimentos.acumulado_atual)}</p>
+                    </Card>
+                  </div>
+                  <div className="space-y-2">
+                    {investimentos.historico.map((a, i) => (
+                      <Card key={i} className="flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold">{a.mes}</p>
+                          <p className="text-gray-400 text-sm">Rendimento: {a.rendimento_pct}%</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-indigo-400 font-bold">{formatBRL(a.aportado)}</p>
+                          <p className="text-gray-400 text-xs">Acum: {formatBRL(a.acumulado)}</p>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <Card className="text-center py-8"><p className="text-gray-500">Nenhum investimento registrado</p></Card>
+              )}
+            </div>
+          )}
+
+          {tab === "config" && !loading && (
+            <div className="space-y-4">
+              <h2 className="text-lg font-bold">Configuração</h2>
+              <Card>
+                {config ? (
+                  <div className="space-y-3">
+                    <div className="flex justify-between"><span className="text-gray-400">Salário</span><span className="font-bold text-green-400">{formatBRL(config.salario)}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">% Investimento</span><span className="font-bold">{config.percentual_investimento}%</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">Valor a Investir</span><span className="font-bold text-indigo-400">{formatBRL(config.valor_a_investir)}</span></div>
+                    <hr className="border-gray-700" />
+                    <Btn onClick={() => { setConfigForm({ salario: config.salario, percentual_investimento: config.percentual_investimento }); setModal("config"); }}>
+                      <i className="fas fa-edit mr-1"></i> Editar
+                    </Btn>
+                  </div>
+                ) : (
+                  <div className="text-center py-6">
+                    <p className="text-gray-400 mb-3">Nenhuma configuração encontrada</p>
+                    <Btn onClick={() => setModal("config")}><i className="fas fa-plus mr-1"></i> Configurar Salário</Btn>
+                  </div>
+                )}
+              </Card>
+            </div>
+          )}
+        </main>
+
+        <footer className="text-center py-6 mt-8 border-t border-gray-800">
+          <p className="text-gray-500 text-sm italic">
+            Feito por Jev, para alguém que adora ter controle, ter ainda mais controle. Te amo minha capelinha. <span className="text-red-400">❤</span>
+          </p>
+        </footer>
+
+        <Modal open={modal === "config"} onClose={() => setModal(null)} title="Configurar Salário">
+          <Input label="Salário (R$)" type="number" value={configForm.salario} onChange={e => setConfigForm({ ...configForm, salario: e.target.value })} />
+          <Input label="% para Investimento" type="number" value={configForm.percentual_investimento} onChange={e => setConfigForm({ ...configForm, percentual_investimento: e.target.value })} />
+          <Btn onClick={saveConfig} className="w-full mt-2">Salvar</Btn>
+        </Modal>
+
+        <Modal open={modal === "fixo"} onClose={() => setModal(null)} title="Novo Gasto Fixo">
+          <Input label="Descrição" value={fixoForm.descricao} onChange={e => setFixoForm({ ...fixoForm, descricao: e.target.value })} />
+          <Input label="Valor (R$)" type="number" value={fixoForm.valor} onChange={e => setFixoForm({ ...fixoForm, valor: e.target.value })} />
+          <Input label="Dia do Vencimento" type="number" min="1" max="31" value={fixoForm.vencimento_dia} onChange={e => setFixoForm({ ...fixoForm, vencimento_dia: e.target.value })} />
+          <Btn onClick={addFixo} className="w-full mt-2">Adicionar</Btn>
+        </Modal>
+
+        <Modal open={modal === "diario"} onClose={() => setModal(null)} title="Registrar Gasto">
+          <Input label="Data" type="date" value={diarioForm.data} onChange={e => setDiarioForm({ ...diarioForm, data: e.target.value })} />
+          <Input label="Descrição" value={diarioForm.descricao} onChange={e => setDiarioForm({ ...diarioForm, descricao: e.target.value })} />
+          <Select label="Categoria" options={CATEGORIAS} value={diarioForm.categoria} onChange={e => setDiarioForm({ ...diarioForm, categoria: e.target.value })} />
+          <Input label="Valor (R$)" type="number" value={diarioForm.valor} onChange={e => setDiarioForm({ ...diarioForm, valor: e.target.value })} />
+          <Select label="Forma de Pagamento" options={PAGAMENTOS} value={diarioForm.forma_pagamento} onChange={e => setDiarioForm({ ...diarioForm, forma_pagamento: e.target.value })} />
+          <Btn onClick={addDiario} className="w-full mt-2">Registrar</Btn>
+        </Modal>
+
+        <Modal open={modal === "inv"} onClose={() => setModal(null)} title="Novo Aporte">
+          <Input label="Mês Referência" type="month" value={invForm.mes_referencia} onChange={e => setInvForm({ ...invForm, mes_referencia: e.target.value })} />
+          <Input label="Valor Aportado (R$)" type="number" value={invForm.valor_aportado} onChange={e => setInvForm({ ...invForm, valor_aportado: e.target.value })} />
+          <Input label="Rendimento (%)" type="number" step="0.1" value={invForm.rendimento_percentual} onChange={e => setInvForm({ ...invForm, rendimento_percentual: e.target.value })} />
+          <Btn onClick={addInv} className="w-full mt-2">Registrar Aporte</Btn>
+        </Modal>
+      </div>
+    );
+  }
+
+  // Renderiza a aplicação
+  ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
