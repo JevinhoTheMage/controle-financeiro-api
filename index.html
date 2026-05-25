@@ -4,28 +4,33 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Controle Financeiro J ❤ N</title>
-    <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/recharts@2.5.0/umd/Recharts.min.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <!-- Bibliotecas em versões compatíveis -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
-        body { background-color: #111827; color: white; margin: 0; font-family: sans-serif; }
-        .bg-gradient-text { background: linear-gradient(to right, #818cf8, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        body { background-color: #0f172a; color: white; margin: 0; font-family: sans-serif; }
     </style>
 </head>
 <body>
     <div id="root"></div>
-    <script>
-        const { useState, useEffect, useCallback, useMemo } = React;
-        const { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line } = Recharts;
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+        const { 
+            PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, 
+            Tooltip, ResponsiveContainer, LineChart, Line 
+        } = Recharts;
 
         const API = "https://controle-financeiro-api-production-4c60.up.railway.app";
         const COLORS = ["#6366f1","#f59e0b","#10b981","#ef4444","#3b82f6","#ec4899","#8b5cf6","#14b8a6","#f97316","#84cc16","#06b6d4","#e11d68"];
         const CATEGORIAS = ["Alimentação","Transporte","Lazer","Saúde","Educação","Moradia","Vestuário","Assinaturas","Pets","Presentes","Viagem","Outros"];
         const PAGAMENTOS = ["Débito","Crédito","Pix","Dinheiro","Transferência"];
-
-        const e = React.createElement;
 
         function formatBRL(v) { return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
 
@@ -37,94 +42,135 @@
             const [diarios, setDiarios] = useState([]);
             const [investimentos, setInvestimentos] = useState(null);
             const [categorias, setCategorias] = useState([]);
-            const [comparacao, setComparacao] = useState([]);
             const [loading, setLoading] = useState(false);
-            const [modal, setModal] = useState(null);
             const [msg, setMsg] = useState("");
             const [mesRef, setMesRef] = useState(new Date().toISOString().slice(0, 7));
 
             const api = useCallback(async (path, opts = {}) => {
                 try {
-                    const res = await fetch(API + path, { headers: { "Content-Type": "application/json" }, ...opts });
+                    const res = await fetch(API + path, { 
+                        headers: { "Content-Type": "application/json" }, 
+                        ...opts 
+                    });
                     return await res.json();
-                } catch (err) { setMsg("Erro de conexão"); return null; }
+                } catch (err) { 
+                    setMsg("Erro ao conectar com API"); 
+                    return null; 
+                }
             }, []);
 
             const load = useCallback(async () => {
                 setLoading(true);
-                const [d, c, f, g, i, cat, comp] = await Promise.all([
-                    api("/dashboard?mes_referencia=" + mesRef),
-                    api("/config"),
-                    api("/gastos-fixos"),
-                    api("/gastos-diarios?mes_referencia=" + mesRef),
-                    api("/investimentos"),
-                    api("/por-categoria?mes_referencia=" + mesRef),
-                    api("/comparacao-mensal"),
-                ]);
+                const d = await api("/dashboard?mes_referencia=" + mesRef);
+                const c = await api("/config");
+                const f = await api("/gastos-fixos");
+                const g = await api("/gastos-diarios?mes_referencia=" + mesRef);
+                const inv = await api("/investimentos");
+                const cat = await api("/por-categoria?mes_referencia=" + mesRef);
+
                 if (d && !d.detail) setDash(d);
                 if (c && !c.detail) setConfig(c);
                 if (f) setFixos(f.gastos_fixos || []);
                 if (g) setDiarios(g.gastos || []);
-                if (i) setInvestimentos(i);
+                if (inv) setInvestimentos(inv);
                 if (cat) setCategorias(cat.categorias || []);
-                if (comp) setComparacao(comp.comparacao_mensal || []);
                 setLoading(false);
             }, [api, mesRef]);
 
             useEffect(() => { load(); }, [load]);
-            useEffect(() => { if (msg) { const t = setTimeout(() => setMsg(""), 3000); return () => clearTimeout(t); } }, [msg]);
 
             const tabs = [
-                { id: "dashboard", icon: "fa-chart-line", label: "Dashboard" },
+                { id: "dashboard", icon: "fa-chart-line", label: "Geral" },
                 { id: "fixos", icon: "fa-thumbtack", label: "Fixos" },
-                { id: "diarios", icon: "fa-receipt", label: "Diários" },
-                { id: "investimentos", icon: "fa-piggy-bank", label: "Investimentos" },
+                { id: "diarios", icon: "fa-receipt", label: "Gastos" },
+                { id: "investimentos", icon: "fa-piggy-bank", label: "Invest" },
                 { id: "config", icon: "fa-gear", label: "Config" },
             ];
 
-            return e("div", { className: "min-h-screen flex flex-col" },
-                msg && e("div", { className: "fixed top-4 right-4 bg-indigo-600 px-4 py-2 rounded shadow-lg z-50 transition-opacity" }, msg),
-                e("header", { className: "bg-gray-800 border-b border-gray-700 py-3 px-4 shadow-md" },
-                    e("div", { className: "max-w-6xl mx-auto flex justify-between items-center" },
-                        e("div", { className: "flex items-center gap-2" },
-                            e("i", { className: "fas fa-wallet text-indigo-400 text-xl" }),
-                            e("h1", { className: "text-lg md:text-xl font-bold bg-gradient-text" }, "Controle Financeiro J ", e("span", { style: { color: "#ef4444" } }, "❤"), " N")
-                        ),
-                        e("input", { type: "month", value: mesRef, onChange: v => setMesRef(v.target.value), className: "bg-gray-700 rounded px-2 py-1 text-sm border border-gray-600" })
-                    )
-                ),
-                e("nav", { className: "bg-gray-800 border-b border-gray-700 sticky top-0 z-40 overflow-x-auto no-scrollbar" },
-                    e("div", { className: "max-w-6xl mx-auto flex" },
-                        tabs.map(t => e("button", { 
-                            key: t.id, 
-                            onClick: () => setTab(t.id),
-                            className: `px-4 py-3 flex items-center gap-2 text-sm border-b-2 transition-all ${tab === t.id ? "border-indigo-500 text-indigo-400" : "border-transparent text-gray-400"}`
-                        }, e("i", { className: `fas ${t.icon}` }), t.label))
-                    )
-                ),
-                e("main", { className: "flex-grow p-4 max-w-6xl mx-auto w-full" },
-                    loading ? e("div", { className: "flex justify-center p-20" }, e("i", { className: "fas fa-spinner fa-spin text-4xl text-indigo-500" })) :
-                    tab === "dashboard" ? (dash ? e("div", { className: "space-y-4" },
-                        e("div", { className: "grid grid-cols-2 md:grid-cols-4 gap-3 text-center" },
-                            ["Renda", formatBRL(dash.renda), "text-green-400"],
-                            ["Gastos Fixos", formatBRL(dash.gastos_fixos), "text-orange-400"],
-                            ["Gastos Avulsos", formatBRL(dash.gasto_avulso_real), "text-red-400"],
-                            ["Investimentos", formatBRL(dash.investimento_acumulado), "text-indigo-400"]
-                        ).map(([label, val, col], i) => e("div", { key: i, className: "bg-gray-800 p-3 rounded-lg border border-gray-700 shadow" }, e("p", { className: "text-xs text-gray-500 uppercase" }, label), e("p", { className: `text-lg font-bold ${col}` }, val))),
-                        e("div", { className: "bg-gray-800 p-4 rounded-lg border border-gray-700" },
-                            e("div", { className: "flex justify-between mb-2 text-sm" }, e("span", null, "Ainda posso gastar: ", e("b", null, formatBRL(dash.ainda_posso_gastar))), e("span", { className: "bg-gray-900 px-2 py-0.5 rounded text-xs" }, dash.percentual_budget_utilizado, "%")),
-                            e("div", { className: "h-3 bg-gray-700 rounded-full overflow-hidden" }, e("div", { style: { width: Math.min(dash.percentual_budget_utilizado, 100) + "%" }, className: `h-full ${dash.percentual_budget_utilizado > 90 ? "bg-red-500" : "bg-indigo-500"}` }))
-                        )
-                    ) : e("div", { className: "text-center py-20 bg-gray-800 rounded-xl" }, "Aguardando configuração de renda...")) :
-                    e("div", { className: "text-center py-10" }, "Menu: " + tab.toUpperCase() + " está carregando...")
-                ),
-                e("footer", { className: "p-8 text-center text-gray-600 text-sm italic" }, 
-                    "Feito por Jev, para alguém que adora ter controle, ter ainda mais controle. Te amo minha capelinha. ", e("span", { style: { color: "#ef4444" } }, "❤")
-                )
+            return (
+                <div className="min-h-screen flex flex-col bg-slate-900">
+                    <header className="bg-slate-800 border-b border-slate-700 p-4">
+                        <div className="max-w-4xl mx-auto flex justify-between items-center">
+                            <h1 className="text-lg font-bold text-indigo-400">
+                                Controle J <span className="text-red-500">❤</span> N
+                            </h1>
+                            <input type="month" value={mesRef} onChange={e => setMesRef(e.target.value)} 
+                                className="bg-slate-700 text-sm rounded px-2 py-1 border border-slate-600 focus:outline-none"/>
+                        </div>
+                    </header>
+
+                    <nav className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10 overflow-x-auto whitespace-nowrap">
+                        <div className="max-w-4xl mx-auto flex">
+                            {tabs.map(t => (
+                                <button key={t.id} onClick={() => setTab(t.id)}
+                                    className={`px-5 py-3 text-sm font-medium flex items-center gap-2 border-b-2 transition-colors ${tab === t.id ? "border-indigo-500 text-indigo-400" : "border-transparent text-slate-400"}`}>
+                                    <i className={`fas ${t.icon}`}></i> {t.label}
+                                </button>
+                            ))}
+                        </div>
+                    </nav>
+
+                    <main className="flex-grow p-4 max-w-4xl mx-auto w-full">
+                        {loading ? (
+                            <div className="flex justify-center p-20 text-indigo-500"><i className="fas fa-spinner fa-spin text-3xl"></i></div>
+                        ) : tab === "dashboard" && dash ? (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-sm">
+                                        <p className="text-xs text-slate-400 mb-1">RENDA</p>
+                                        <p className="text-xl font-bold text-emerald-400">{formatBRL(dash.renda)}</p>
+                                    </div>
+                                    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-sm">
+                                        <p className="text-xs text-slate-400 mb-1">INVESTIDO</p>
+                                        <p className="text-xl font-bold text-indigo-400">{formatBRL(dash.investimento_acumulado)}</p>
+                                    </div>
+                                </div>
+                                <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                                    <div className="flex justify-between items-end mb-2">
+                                        <div>
+                                            <p className="text-xs text-slate-400 uppercase">Budget Avulso</p>
+                                            <p className="text-lg font-bold">Restam {formatBRL(dash.ainda_posso_gastar)}</p>
+                                        </div>
+                                        <span className="text-xs bg-slate-900 px-2 py-1 rounded text-slate-400">{dash.percentual_budget_utilizado}%</span>
+                                    </div>
+                                    <div className="h-2.5 bg-slate-700 rounded-full overflow-hidden">
+                                        <div style={{ width: Math.min(dash.percentual_budget_utilizado, 100) + "%" }} 
+                                             className={`h-full ${dash.percentual_budget_utilizado > 90 ? "bg-red-500" : "bg-indigo-500"}`}></div>
+                                    </div>
+                                </div>
+                                {categorias.length > 0 && (
+                                    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                                        <h3 className="text-sm font-bold text-slate-400 mb-4 uppercase">Gastos por Categoria</h3>
+                                        <div className="h-60">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <PieChart>
+                                                    <Pie data={categorias} dataKey="total" nameKey="categoria" cx="50%" cy="50%" outerRadius={70} label={({categoria}) => categoria}>
+                                                        {categorias.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                                                    </Pie>
+                                                    <Tooltip formatter={(v) => formatBRL(v)} />
+                                                </PieChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="text-center py-10 text-slate-500">
+                                <i className="fas fa-hand-holding-dollar text-4xl mb-4"></i>
+                                <p>Acesse as abas superiores para gerenciar seus dados!</p>
+                            </div>
+                        )}
+                    </main>
+
+                    <footer className="p-6 text-center text-slate-600 text-xs italic border-t border-slate-800">
+                        Feito por Jev, para alguém que adora ter controle, ter ainda mais controle. Te amo minha capelinha. <span className="text-red-700">❤</span>
+                    </footer>
+                </div>
             );
         }
 
-        ReactDOM.render(e(App), document.getElementById('root'));
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>
