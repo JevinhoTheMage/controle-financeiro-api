@@ -1,0 +1,62 @@
+from sqlalchemy import create_engine, Column, Integer, Float, String, Date, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+import os
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./financas.db")
+
+# Render/Railway usam PostgreSQL com "postgres://", SQLAlchemy exige "postgresql://"
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+class ConfigDB(Base):
+    __tablename__ = "config"
+    id = Column(Integer, primary_key=True, default=1)
+    salario = Column(Float, default=0.0)
+    percentual_investimento = Column(Float, default=10.0)
+
+
+class GastoFixoDB(Base):
+    __tablename__ = "gastos_fixos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    descricao = Column(String)
+    valor = Column(Float)
+    vencimento_dia = Column(Integer)
+
+
+class GastoDiarioDB(Base):
+    __tablename__ = "gastos_diarios"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data = Column(Date)
+    descricao = Column(String)
+    categoria = Column(String)
+    valor = Column(Float)
+    forma_pagamento = Column(String)
+    mes_referencia = Column(String)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
+
+class InvestimentoDB(Base):
+    __tablename__ = "investimentos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mes_referencia = Column(String)
+    valor_aportado = Column(Float)
+    rendimento_percentual = Column(Float, default=0.8)
+    acumulado = Column(Float, default=0.0)
+
+
+Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

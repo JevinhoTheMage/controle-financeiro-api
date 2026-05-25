@@ -1,0 +1,217 @@
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from datetime import date
+from typing import Optional
+from collections import defaultdict
+
+from database import get_db, ConfigDB, GastoFixoDB, GastoDiarioDB, InvestimentoDB
+from models import ConfigIn, GastoFixoIn, GastoDiarioIn, InvestimentoIn
+
+app = FastAPI(
+    title="API de Controle Financeiro Pessoal",
+    description="Gerencie renda, investimentos, gastos fixos e avulsos.",
+    version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+CATEGORIAS_VALIDAS = [
+    "Alimentação", "Transporte", "Lazer", "Saúde", "Educação",
+    "Moradia", "Vestuário", "Assinaturas", "Pets", "Presentes", "Viagem", "Outros"
+]
+PAGAMENTOS_VALIDOS = ["Débito", "Crédito", "Pix", "Dinheiro", "Transferência"]
+
+
+@app.get("/", summary="Health check")
+def root():
+    return {"status": "online", "docs": "/docs"}
+
+
+# CONFIG
+@app.post("/config")
+def set_config(data: ConfigIn, db: Session = Depends(get_db)):
+    config = db.query(ConfigDB).first()
+    if not config:
+        config = ConfigDB(id=1)
+        db.add(config)
+    config.salario = data.salario
+    config.percentual_investimento = data.percentual_investimento
+    db.commit()
+    return {"mensagem": "Configuração salva.", "dados": data}
+
+
+@app.get("/config")
+def get_config(db: Session = Depends(get_db)):
+    config = db.query(ConfigDB).first()
+    if not config:
+        raise HTTPException(404, "Configure o salário primeiro.")
+    a_investir = config.salario * config.percentual_investimento / 100
+    return {
+        "salario": config.salario,
+        "percentual_investimento": config.percentual_investimento,
+        "valor_a_investir": round(a_investir, 2)
+    }
+
+
+# GASTOS FIXOS
+@app.post("/gastos-fixos")
+def add_gasto_fixo(data: GastoFixoIn, db: Session = Depends(get_db)):
+    gasto = GastoFixoDB(**data.dict())
+    db.add(gasto)
+    db.commit()
+    db.refresh(gasto)
+    return {"mensagem": "Gasto fixo adicionado.", "id": gasto.id}
+
+
+@app.get("/gastos-fixos")
+def list_gastos_fixos(db: Session = Depends(get_db)):
+    gastos = db.query(GastoFixoDB).all()
+    return {
+        "gastos_fixos": [{"id": g.id, "descricao": g.descricao, "valor": g.valor, "vencimento_dia": g.vencimento_dia} for g in gastos],
+        "total_fixo": round(sum(g.valor for g in gastos), 2)
+    }
+
+
+@app.delete("/gastos-fixos/{id}")
+def delete_gasto_fixo(id: int, db: Session = Depends(get_db)):
+    gasto = db.query(GastoFixoDB).filter(GastoFixoDB.id == id).first()
+    if not gasto:
+        raise HTTPException(404, "Não encontrado.")
+    db.delete(gasto)
+    db.commit()
+    return {"mensagem": f"Gasto fixo #{id} removido."}
+
+
+# GASTOS DIÁRIOS
+@app.post("/gastos-diarios")
+def add_gasto_diario(data: GastoDiarioIn, db: Session = Depends(get_db)):
+    if data.categoria not in CATEGORIAS_VALIDAS:
+        raise HTTPException(400, f"Categoria inválida. Use: {CATEGORIAS_VALIDAS}")
+    if data.forma_pagamento not in PAGAMENTOS_VALIDOS:
+        raise HTTPException(400, f"Pagamento inválido. Use: {PAGAMENTOS_VALIDOS}")
+    mes_ref = data.mes_referencia or data.data.strftime("%Y-%m")
+    gasto = GastoDiarioDB(
+        data=data.data, descricao=data.descricao, categoria=data.categoria,
+        valor=data.valor, forma_pagamento=data.forma_pagamento, mes_referencia=mes_ref
+    )
+    db.add(gasto)
+    db.commit()
+    db.refresh(gasto)
+    return {"mensagem": "Gasto registrado.", "id": gasto.id}
+
+
+@app.get("/gastos-diarios")
+def list_gastos_diarios(mes_referencia: Optional[str] = None, categoria: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(GastoDiarioDB)
+    if mes_referencia:
+        q = q.filter(GastoDiarioDB.mes_referencia == mes_referencia)
+    if categoria:
+        q = q.filter(GastoDiarioDB.categoria == categoria)
+    gastos = q.order_by(GastoDiarioDB.data.desc()).all()
+    return {
+        "gastos": [{"id": g.id, "data": str(g.data), "descricao": g.descricao, "categoria": g.categoria,
+                    "valor": g.valor, "forma_pagamento": g.forma_pagamento, "mes_referencia": g.mes_referencia} for g in gastos],
+        "total": round(sum(g.valor for g in gastos), 2),
+        "quantidade": len(gastos)
+    }
+
+
+@app.delete("/gastos-diarios/{id}")
+def delete_gasto_diario(id: int, db: Session = Depends(get_db)):
+    gasto = db.query(GastoDiarioDB).filter(GastoDiarioDB.id == id).first()
+    if not gasto:
+        raise HTTPException(404, "Não encontrado.")
+    db.delete(gasto)
+    db.commit()
+    return {"mensagem": f"Gasto #{id} removido."}
+
+
+# INVESTIMENTOS
+@app.post("/investimentos")
+def add_investimento(data: InvestimentoIn, db: Session = Depends(get_db)):
+    if db.query(InvestimentoDB).filter(InvestimentoDB.mes_referencia == data.mes_referencia).first():
+        raise HTTPException(400, f"Já existe aporte para {data.mes_referencia}.")
+    ultimo = db.query(InvestimentoDB).order_by(InvestimentoDB.mes_referencia.desc()).first()
+    acumulado_anterior = ultimo.acumulado if ultimo else 0.0
+    rendimento = acumulado_anterior * data.rendimento_percentual / 100
+    acumulado = round(acumulado_anterior + rendimento + data.valor_aportado, 2)
+    inv = InvestimentoDB(mes_referencia=data.mes_referencia, valor_aportado=data.valor_aportado,
+                         rendimento_percentual=data.rendimento_percentual, acumulado=acumulado)
+    db.add(inv)
+    db.commit()
+    return {"mensagem": "Aporte registrado.", "acumulado": acumulado}
+
+
+@app.get("/investimentos")
+def list_investimentos(db: Session = Depends(get_db)):
+    aportes = db.query(InvestimentoDB).order_by(InvestimentoDB.mes_referencia).all()
+    return {
+        "historico": [{"mes": a.mes_referencia, "aportado": a.valor_aportado,
+                       "rendimento_pct": a.rendimento_percentual, "acumulado": a.acumulado} for a in aportes],
+        "total_aportado": round(sum(a.valor_aportado for a in aportes), 2),
+        "acumulado_atual": aportes[-1].acumulado if aportes else 0.0
+    }
+
+
+# DASHBOARD
+@app.get("/dashboard")
+def dashboard(mes_referencia: Optional[str] = None, db: Session = Depends(get_db)):
+    mes = mes_referencia or date.today().strftime("%Y-%m")
+    config = db.query(ConfigDB).first()
+    if not config:
+        raise HTTPException(404, "Configure o salário primeiro em POST /config")
+    a_investir = round(config.salario * config.percentual_investimento / 100, 2)
+    total_fixo = round(sum(g.valor for g in db.query(GastoFixoDB).all()), 2)
+    budget_avulso = round(config.salario - a_investir - total_fixo, 2)
+    gastos_dia = db.query(GastoDiarioDB).filter(GastoDiarioDB.mes_referencia == mes).all()
+    gasto_avulso_real = round(sum(g.valor for g in gastos_dia), 2)
+    ainda_posso_gastar = round(budget_avulso - gasto_avulso_real, 2)
+    pct = round(gasto_avulso_real / budget_avulso * 100, 1) if budget_avulso > 0 else 0
+    status = "🟢 OK" if pct <= 70 else ("🟡 Atenção" if pct <= 90 else "🔴 Limite")
+    ultimo_inv = db.query(InvestimentoDB).order_by(InvestimentoDB.mes_referencia.desc()).first()
+    return {
+        "mes_referencia": mes, "renda": config.salario, "a_investir": a_investir,
+        "gastos_fixos": total_fixo, "budget_avulsos": budget_avulso,
+        "gasto_avulso_real": gasto_avulso_real, "ainda_posso_gastar": ainda_posso_gastar,
+        "percentual_budget_utilizado": pct, "status_budget": status,
+        "investimento_acumulado": ultimo_inv.acumulado if ultimo_inv else 0.0
+    }
+
+
+# COMPARAÇÃO MENSAL
+@app.get("/comparacao-mensal")
+def comparacao_mensal(db: Session = Depends(get_db)):
+    gastos = db.query(GastoDiarioDB).all()
+    tabela = defaultdict(lambda: defaultdict(float))
+    for g in gastos:
+        tabela[g.mes_referencia][g.categoria] += g.valor
+    return {"comparacao_mensal": [
+        {"mes": mes, "por_categoria": {k: round(v, 2) for k, v in cats.items()}, "total": round(sum(cats.values()), 2)}
+        for mes, cats in sorted(tabela.items())
+    ]}
+
+
+# POR CATEGORIA
+@app.get("/por-categoria")
+def por_categoria(mes_referencia: Optional[str] = None, db: Session = Depends(get_db)):
+    mes = mes_referencia or date.today().strftime("%Y-%m")
+    config = db.query(ConfigDB).first()
+    a_investir = (config.salario * config.percentual_investimento / 100) if config else 0
+    total_fixo = sum(g.valor for g in db.query(GastoFixoDB).all())
+    budget = (config.salario - a_investir - total_fixo) if config else 0
+    gastos = db.query(GastoDiarioDB).filter(GastoDiarioDB.mes_referencia == mes).all()
+    totais = defaultdict(float)
+    for g in gastos:
+        totais[g.categoria] += g.valor
+    resultado = []
+    for cat, total in sorted(totais.items(), key=lambda x: -x[1]):
+        pct = round(total / budget * 100, 1) if budget > 0 else 0
+        status = "Baixo" if pct <= 20 else ("Moderado" if pct <= 40 else "Alto")
+        resultado.append({"categoria": cat, "total": round(total, 2), "pct_budget": pct, "status": status})
+    return {"mes_referencia": mes, "categorias": resultado, "budget_total": round(budget, 2)}
